@@ -46,11 +46,11 @@ OS_SEM scoreSem;
 
 OS_MUT dataMTX;
 
-OS_TID tsk1;
-OS_TID tsk2;
-OS_TID tsk3;
-OS_TID tsk4;
-OS_TID tsk5;
+OS_TID tskMine;
+OS_TID tskTank;
+OS_TID tskColl;
+OS_TID tskDisp;
+OS_TID tskScore;
 
 // FUNCTION PROTOTYPES //
 __task void mines_task(void);
@@ -66,6 +66,9 @@ __task void score_task(void);
 struct gameCharacs {
 	uint8_t gameOver;
 	uint8_t score;
+	char* startMessage;
+	char* endMessage;
+	char endScore[20];
 };
 struct gameCharacs game;
 
@@ -236,7 +239,7 @@ void mapCharacsInit() {
 	map.minesRed = Red;
 	
 	//score characteristics
-	map.scoreCycleSpeed = map.minesCycleSpeed*5;
+	map.scoreCycleSpeed = ONE_SECOND*2*2;
 	
 	//tank characteristics
 	map.tankRefreshRate = map.minesCycleSpeed/20;
@@ -245,6 +248,8 @@ void mapCharacsInit() {
 void gameCharacsInit() {
 	game.gameOver = 0;
 	game.score = 0;
+	game.endMessage = "GAME OVER";
+	game.startMessage = "MINEFIELD";
 }
 
 void mineCharacsInit() {
@@ -624,26 +629,33 @@ __task void init_tasks(void) {
 	os_mut_init(&dataMTX);
 	
 	//initialize tasks
-	tsk1 = os_tsk_create(mines_task,1);
-	tsk2 = os_tsk_create(tank_task,1);
-	//os_tsk_create(joy_task,1);
-	tsk3 = os_tsk_create(coll_task,1);
-	tsk4 = os_tsk_create(display_task,1);
-	tsk5 = os_tsk_create(score_task,1);
+	tskMine = os_tsk_create(mines_task,1);
+	tskTank = os_tsk_create(tank_task,1);
+	tskColl = os_tsk_create(coll_task,1);
+	tskDisp = os_tsk_create(display_task,1);
+	tskScore = os_tsk_create(score_task,1);
 	
 	//init_tasks self delete
 	os_tsk_delete_self();
 }
 
+//deletes all tasks
+void del_tasks(void) {
+	os_tsk_delete(tskMine);
+	os_tsk_delete(tskTank);
+	os_tsk_delete(tskColl);
+	os_tsk_delete(tskScore);
+}
 
 //updates mine set states
 __task void mines_task(void) {
 	//mine state tracking variable
 	int i = 0;
 	//set cycle speed
-	os_itv_set(map.minesCycleSpeed);
+	//os_itv_set(map.minesCycleSpeed);
 	
 	while(1) {
+		os_itv_set(map.minesCycleSpeed);
 		//os_sem_wait(&minesSem, TIMEOUT_INDEFINITE); //wait on previous task
 		
 		//change state of current mine set to PRIMED
@@ -678,69 +690,6 @@ __task void mines_task(void) {
 		
 	}
 }
-
-
-/*
-__task void mines_task(void) {
-	os_itv_set(map.minesCycleSpeed);
-	
-	while(1) {
-		os_sem_wait(&minesSem, TIMEOUT_INDEFINITE);
-		
-		//iterate through the current mine set from INVIS to EXP
-		//if current mine set is in the EXP state, change this set
-		//to INVIS state and change next mine set to PRIMED state
-		if(minesCur[mines.setCur] == INVIS)
-				minesNext[mines.setCur] = PRIMED;
-		else if(minesCur[mines.setCur] == PRIMED)
-			minesNext[mines.setCur] == EXP;
-		else if(minesCur[mines.setCur] == EXP) {
-			minesNext[mines.setCur] = INVIS;
-			minesNext[mines.setCur+1] = PRIMED;
-			mines.setCur++;
-		}
-		
-		os_itv_wait();
-		os_sem_send(&tankSem);
-	}
-}
-*/
-
-/*
-__task void joy_task(void) {
-	uint8_t state = 0;
-	char* output;
-	
-	while(1) {
-		if(tank.isMoving == 0) {
-			os_sem_wait(&tankSem, TIMEOUT_INDEFINITE);
-			
-			
-			state = joyStickRead();
-			if((state & 0x07) == 0x01) {
-				tank.dirNext = LEFT;
-			}
-			else if((state & 0x07) == 0x02) {
-				tank.dirNext = RIGHT;
-			}
-			else if((state & 0x07) == 0x03) {
-				tank.dirNext = DOWN;
-			}
-			else if((state & 0x07) == 0x04) {
-				tank.dirNext = UP;
-			}
-			
-				
-			if((state & (0x01 << 4)) > 0)
-				tank.isMoving = 1;
-			
-			
-			os_sem_send(&collSem);
-			os_sem_send(&tankSem);
-		}
-	}
-}
-*/
 
 //updates tank position data
 __task void tank_task(void) {
@@ -862,15 +811,19 @@ __task void coll_task(void) {
 	}
 }
 
+void endScreenPrint(void) {
+	snprintf(game.endScore, 20, "SCORE: %d Pts", game.score);
+	GLCD_Clear(White);
+	GLCD_SetBackColor(White);
+	GLCD_SetTextColor(Black);
+	GLCD_DisplayString(4,5,1, game.endMessage);
+	GLCD_DisplayString(16,20,0, game.endScore);
+}
 
 //Uses tank data and mine data to print display
 __task void display_task(void) {
 	int i=0;
-	char* endMessage;
-	char endScore[20];
-	
-	endMessage = "GAME OVER";
-	
+	int setNum =0;
 	//print tank starting position
 	tankPrint(tank.xCur, tank.yCur, tank.dirCur);
 	
@@ -879,30 +832,14 @@ __task void display_task(void) {
 		
 		//check for gameOver
 		if(game.gameOver) {
-			snprintf(endScore, 20, "Your score: %d", game.score);
-			GLCD_Clear(Red);
-			GLCD_SetBackColor(Red);
-			GLCD_SetTextColor(Black);
-			GLCD_DisplayString(5,1,1, endMessage);
-			GLCD_DisplayString(6,1,1, endScore);
-			
-			//delete tasks
-			os_tsk_delete(tsk1);
-			os_tsk_delete(tsk2);
-			os_tsk_delete(tsk3);
-			os_tsk_delete(tsk5);
+			endScreenPrint();
+			del_tasks();
 			break;
 		}
 		
-		//print mines if state changed
-		for(i=0; i<4; i++) {
-			if(minesNext[i] != minesCur[i])
-				mineSetPrint(i, minesNext[i]);
-		}
-		
-		
 		//print tank if direction/position changed
 		if(tank.dirNext != tank.dirCur || tank.xNext != tank.xCur || tank.yNext != tank.yCur) {
+			
 			blockClear(tank.xCur,tank.yCur);
 			
 			//store new tank data
@@ -911,8 +848,19 @@ __task void display_task(void) {
 			tank.yCur = tank.yNext;
 			
 			tankPrint(tank.xCur,tank.yCur,tank.dirNext);
+			
+			//Reprint PRIMED mine set in case tank drove over them
+			for(i=0;i<4;i++) {
+				if(minesNext[i] == PRIMED)
+					mineSetPrint(i, minesNext[i]);
+			}
 		}
 		
+		//print mines if state changed
+		for(i=0; i<4; i++) {
+			if(minesNext[i] != minesCur[i])
+				mineSetPrint(i, minesNext[i]);
+		}
 		
 		os_sem_send(&scoreSem);
 		//os_sem_send(&minesSem);
@@ -927,11 +875,56 @@ __task void score_task(void) {
 		(game.score)++;
 		ledDisplay(game.score);
 		
+		map.minesCycleSpeed = map.minesCycleSpeed*0.8;
+		
 		os_itv_wait();
 		os_sem_send(&minesSem);
 	}
 }
 
+void startScreen() {
+	char* m1;
+	char* m2;
+	char* m3;
+	char* m4;
+	char* m5;
+	char* m6;
+	uint32_t bufferJoystick = 0;
+	
+	m1 = "Avoid landing on exploded mines";
+	m2 = "About to explode = yellow, exploded = red";
+	m3 = "Use joystick to set direction";
+	m4 = "Use joystick push to run tank";
+	m5 = "Use push button to stop tank";
+	m6 = "PUSH JOYSTICK BUTTON TO START";
+	
+	//Buffer for Joystick button press	
+	bufferJoystick = 0;
+	bufferJoystick |= LPC_GPIO1->FIOPIN;
+	
+	snprintf(game.endScore, 20, "SCORE: %d Pts", game.score);
+	GLCD_Clear(White);
+	GLCD_SetBackColor(White);
+	GLCD_SetTextColor(Black);
+	GLCD_DisplayString(1,5,1, game.startMessage);
+	GLCD_DisplayString(9,2,0, m1);
+	GLCD_DisplayString(11,2,0, m2);
+	GLCD_DisplayString(13,2,0, m3);
+	GLCD_DisplayString(15,2,0, m4);
+	GLCD_DisplayString(17,2,0, m5);
+	GLCD_DisplayString(25,2,0, m6);
+	
+	//Waiting for joystick button press	
+	while(!((LPC_GPIO1->FIOPIN & BIT20) == 0)){
+		
+	}
+	
+	//Configuring screen settings for the game	
+	GLCD_Clear(Black);
+	GLCD_SetBackColor(Black);
+}
+
+/*
 void startScreen(){
 //Local variables for start screen
 	uint32_t bufferJoystick = 0;
@@ -960,6 +953,7 @@ void startScreen(){
 	GLCD_Clear(Black);
 	GLCD_SetBackColor(Black);
 }
+*/
 
 int main(void) {
 	initialization();
